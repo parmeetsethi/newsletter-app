@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Newsletter Generator: storage architecture and data flow, for security review</title>
+<style>
+/* HCLTech brand stylesheet — generated pages start here.
+   Values mirror hcltech-vi/assets/tokens.json (portal palette, ratified 2026-07-30). */
+
+:root {
+  /* primary */
+  --hcl-blue: #0F5FDC; --hcl-blue-05: #144FAF; --hcl-blue-04: #3D81F1;
+  --hcl-blue-03: #5CA7F9; --hcl-blue-02: #97CDFA; --hcl-blue-01: #DAEDFD;
+  --hcl-purple: #5F1EBE; --hcl-purple-05: #461A8F; --hcl-purple-04: #7441C7;
+  --hcl-purple-03: #8962E2; --hcl-purple-02: #B59EF5; --hcl-purple-01: #E5DEFB;
+  --hcl-midnight: #1A2B5A; --hcl-midnight-05: #0C1F4A; --hcl-midnight-04: #2D5499;
+  --hcl-midnight-03: #5B85CC; --hcl-midnight-02: #A9C4FF; --hcl-midnight-01: #D6E8FF;
+  /* secondary mains (always beside a primary, never alone) */
+  --hcl-teal: #00D4CF; --hcl-green: #34D472; --hcl-yellow: #FFD600;
+  --hcl-orange: #FF9800; --hcl-pink: #F05470;
+  /* workhorse neutrals */
+  --hcl-panel: rgba(230, 235, 245, 0.7);   /* #E6EBF5 @70% */
+  --hcl-panel-solid: #E6EBF5;
+  --hcl-hairline: #C8D2DD;
+  --hcl-grey-label: #A5AFBE;
+  --hcl-ramp-3: #3C91FF;   /* fixed mid-blue, step 3 of the category ramp (dots switch only) */
+  /* semantic */
+  --hcl-ink: #000000; --hcl-ground: #FFFFFF;
+  --hcl-accent: var(--hcl-blue);
+  --hcl-kicker-ink: var(--hcl-purple);
+  /* gradients (linear fallbacks of the official corner-node assets) */
+  --hcl-gradient-intense: linear-gradient(45deg, #411482 22%, #3C91FF 81%, #8CC8FA 100%);
+  --hcl-gradient-light: linear-gradient(130deg, #E6EBF5 0%, #CED9FF 40%, #AFD9FC 100%);
+  /* The two middle/end stops are NOT invented tints. They are the ratified
+     recipe in hcltech-vi/references/gradients.md — #E6EBF5 0%, rgba(185,200,255,.7) 40%,
+     rgba(140,200,250,.7) 100% — composited over #FFFFFF and baked solid:
+       0.7*185 + 0.3*255 = 206.0  0.7*200 + 0.3*255 = 216.5  0.7*255 + 0.3*255 = 255  -> #CED9FF
+       0.7*140 + 0.3*255 = 174.5  0.7*200 + 0.3*255 = 216.5  0.7*250 + 0.3*255 = 251.5 -> #AFD9FC
+     Baked because .hcl-hero-light must stay light in dark mode (it forces black
+     ink). Rendered side by side in both schemes: over white the two are
+     indistinguishable; over the #19191E dark ground the alpha version drops to a
+     muddy slate that black body copy cannot sit on. Solid keeps the approved
+     result on every ground. Change the recipe in gradients.md, not here. */
+  /* shape + rhythm */
+  --hcl-radius: 6px;
+  --hcl-unit: 19px;
+  --hcl-font: "HCLTech Roobert", sans-serif;
+}
+
+/* dark mode (salvaged from the retired brand skill, 2026-07-30): token-level swap */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hcl-ground: #19191E;
+    --hcl-ink: #FFFFFF;
+    --hcl-panel: rgba(42, 42, 50, 0.9);
+    --hcl-panel-solid: #2A2A32;
+    --hcl-hairline: #8291A0;
+    --hcl-grey-label: #C8D2DD;
+    --hcl-accent: #3C91FF;
+    --hcl-kicker-ink: var(--hcl-purple-02); /* raw purple is ~1.8:1 on dark ground */
+  }
+}
+
+/* base */
+body { font-family: var(--hcl-font); color: var(--hcl-ink); background: var(--hcl-ground);
+       line-height: 1.6; margin: 0; }
+a { color: var(--hcl-accent); }
+h1, h2, h3 { font-weight: 300; line-height: 1.0; color: var(--hcl-ink); text-wrap: balance; }
+/* Type ratio on the web is 2.5 : 1.25 : 1, not the 4:2:1 quoted for decks.
+   The owner pulled the headline down from 4rem to 2.5rem on 2026-07-30 because
+   4rem overpowered a scrolling page at reading width; the subhead came down with
+   it to hold the same 2:1 step between headline and subhead. Read the numbers,
+   not the old label. */
+h1 { font-size: 2.5rem; }      /* 2.5 — owner-adjusted 2026-07-30 down from 4rem */
+h2 { font-size: 1.25rem; }     /* 1.25 — halved with it, so h1:h2 stays 2:1 */
+body, p { font-size: 1rem; }   /* 1 */
+h1 b, h1 strong, h2 b, h2 strong { font-weight: 700; } /* the ONE highlighted keyword */
+p { max-width: 72ch; }
+
+/* kicker / eyebrow — use once per hero, not on every heading.
+   Sentence case only: never add text-transform uppercase (owner ruling). */
+.hcl-kicker { font-size: 0.875rem; font-weight: 400; letter-spacing: 0.04em; color: var(--hcl-kicker-ink); }
+
+/* surfaces */
+.hcl-card  { background: var(--hcl-ground); border: 1px solid var(--hcl-hairline);
+             border-radius: var(--hcl-radius); padding: var(--hcl-unit); }
+.hcl-panel { background: var(--hcl-panel); border-radius: var(--hcl-radius); padding: var(--hcl-unit); }
+.hcl-emphasis { background: var(--hcl-blue); color: #fff; border-radius: var(--hcl-radius); padding: var(--hcl-unit); }
+.hcl-hero-dark  { background: var(--hcl-gradient-intense); color: #fff; }
+.hcl-hero-light { background: var(--hcl-gradient-light); }
+/* surface-scoped token overrides: children styled through the variables stay
+   legible without per-element colour hacks, in both colour schemes */
+.hcl-emphasis, .hcl-hero-dark {
+  --hcl-ink: #FFFFFF;                       /* headings/quote footers inherit white */
+  --hcl-kicker-ink: var(--hcl-purple-01);   /* raw purple vanishes on the dark gradient */
+}
+.hcl-hero-light {                            /* gradient stays light in dark mode… */
+  --hcl-ink: #000000;                        /* …so ink must stay dark */
+  --hcl-accent: var(--hcl-blue);
+  --hcl-kicker-ink: var(--hcl-purple);
+  --hcl-grey-label: #A5AFBE;
+  color: var(--hcl-ink);  /* re-anchor: inherited colour is body's computed ink, not the scoped token */
+}
+
+/* stat block: big LIGHT number, colour carries emphasis.
+   NEST .hcl-stat inside .hcl-emphasis / .hcl-hero-dark (never both classes on
+   one element) or the white-number override will not match. */
+.hcl-stat { display: flex; flex-direction: column; gap: 4px; }
+.hcl-stat .n { font-size: 3rem; font-weight: 300; color: var(--hcl-accent); line-height: 1; }
+.hcl-stat .d { font-size: 0.875rem; max-width: 26ch; }
+.hcl-emphasis .hcl-stat .n, .hcl-hero-dark .hcl-stat .n { color: #fff; }
+
+/* tables: base ledger = 1px black open/close rules, hairline separators, no verticals.
+   Independent modifier classes extend this one base — never a parallel table system.
+   Full switch menu + copy-paste snippets: references/tables.md (loaded on demand). */
+.hcl-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.hcl-table th { font-weight: 700; text-align: left; padding: 10px 12px;
+                border-top: 1px solid var(--hcl-ink); border-bottom: 1px solid var(--hcl-ink); }
+.hcl-table td { padding: 10px 12px; border-bottom: 0.5px solid var(--hcl-hairline); text-align: left; }
+.hcl-table tr:last-child td { border-bottom: 1px solid var(--hcl-ink); }
+.hcl-table td.num { text-align: right; }
+/* wrap any .hcl-table in this so wide tables scroll instead of breaking the page */
+.hcl-table-wrap { overflow-x: auto; }
+
+/* switch 1 — header: block-blue / block-purple / gradient (pick at most one; default is
+   the plain rule above). Gradient must paint on the ROW, not per-th, or it chops at each
+   column; browsers also drop backgrounds set on <tr> under border-collapse:collapse, so
+   the gradient variant switches to separate/0-spacing to make the row background reliable. */
+.hcl-table.h-blue th, .hcl-table.h-purple th {
+  color: #fff; font-weight: 700; border-top: none; border-bottom: none;
+}
+.hcl-table.h-blue th { background: var(--hcl-blue); }
+.hcl-table.h-purple th { background: var(--hcl-purple); }
+.hcl-table.h-gradient { border-collapse: separate; border-spacing: 0; }
+.hcl-table.h-gradient thead tr { background: var(--hcl-gradient-intense); }
+.hcl-table.h-gradient th {
+  background: transparent; color: #fff; font-weight: 700; border-top: none; border-bottom: none;
+}
+
+/* switch 2 — band: alternate body rows on the workhorse panel tint */
+.hcl-table tr.band td { background: var(--hcl-panel); }
+
+/* switch 3 — total: colour = last row ruled top+bottom in brand blue, bold blue text */
+.hcl-table tr.total-colour td {
+  border-top: 1px solid var(--hcl-blue); border-bottom: 1px solid var(--hcl-blue);
+  color: var(--hcl-blue); font-weight: 700;
+}
+
+/* switch 4 — firstcol: labels (bold) / rail (bold on a panel tint).
+   Body cells only (td:first-child) — the header cell keeps its own header
+   treatment, so a solid or gradient header spans the full row and the rail
+   starts below it, never behind it. */
+.hcl-table.col-labels td:first-child { font-weight: 700; }
+.hcl-table.col-rail td:first-child {
+  font-weight: 700; background: var(--hcl-panel);
+}
+
+/* switch 5 — dots: a colour dot before first-column text, from the four-step category
+   ramp (deep purple -> blue -> mid-blue -> pale; the pale dot gets a hairline ring).
+   Colour codes meaning — pair with a legend, never use to decorate. */
+.hcl-table.dots td:first-child { display: flex; align-items: center; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+       margin-right: 10px; vertical-align: 1px; flex: none; }
+.dot.c1 { background: var(--hcl-purple); }
+.dot.c2 { background: var(--hcl-blue); }
+.dot.c3 { background: var(--hcl-ramp-3); }
+.dot.c4 { background: #DCE6F0; border: 1px solid var(--hcl-hairline); }
+
+/* switch 6 — spotlight: put class="spot" on ONE column's th and every td in that column.
+   Only one spotlight column at a time; the rest of the table stays in the base style. */
+.hcl-table th.spot {
+  background: var(--hcl-gradient-intense); color: #fff; border-top: none; border-bottom: none;
+}
+.hcl-table td.spot { background: var(--hcl-blue-01); color: var(--hcl-ink); font-weight: 700; }
+
+/* special table 1 — stat table: label + ONE large LIGHT numeral, colour carries emphasis,
+   never bold. Short headline-KPI lists only; see references/tables.md for when to use.
+   Numeral colour rides --hcl-accent (same token .hcl-stat already uses): primary blue
+   #0F5FDC on light grounds, mid-blue #3C91FF on dark — never mid-blue text on a light
+   ground, which colors.md reserves for charcoal/dark-purple surfaces only. */
+.hcl-stat-table { border-collapse: separate; border-spacing: 0; width: 100%; }
+.hcl-stat-table th {
+  font-weight: 700; text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--hcl-ink);
+  color: var(--hcl-grey-label); font-size: 0.8rem;
+}
+.hcl-stat-table td { padding: 16px; border-bottom: 0.5px solid var(--hcl-hairline); vertical-align: middle; }
+.hcl-stat-table tr:last-child td { border-bottom: 1px solid var(--hcl-ink); }
+.hcl-stat-table .metric { font-weight: 400; }
+.hcl-stat-table .big {
+  font-weight: 300; font-size: 2.5rem; line-height: 1; color: var(--hcl-accent);
+  text-align: right; white-space: nowrap;
+}
+.hcl-stat-table .big small { font-size: 1rem; font-weight: 400; color: var(--hcl-grey-label); }
+
+/* special table 2 — editorial table: giant light index + oversized lead line (one optional
+   gradient-clipped keyword) + a muted body column. Hero comparisons of 2-4 items only;
+   see references/tables.md for when to use. */
+.hcl-editorial-table { border-collapse: collapse; width: 100%; }
+.hcl-editorial-table td { padding: 26px 18px; border-bottom: 0.5px solid var(--hcl-hairline); vertical-align: top; }
+.hcl-editorial-table tr:first-child td { border-top: 1px solid var(--hcl-ink); }
+.hcl-editorial-table tr:last-child td { border-bottom: 1px solid var(--hcl-ink); }
+.hcl-editorial-table .idx { font-weight: 300; font-size: 3.2rem; line-height: 0.8; color: var(--hcl-purple); width: 1.4em; }
+.hcl-editorial-table .lead { font-weight: 400; font-size: 1.5rem; line-height: 1.15; letter-spacing: -0.01em; width: 38%; }
+.hcl-editorial-table .lead b { font-weight: 700; }
+.hcl-editorial-table .lead .grad {
+  background: var(--hcl-gradient-intense); -webkit-background-clip: text; background-clip: text;
+  color: transparent; font-weight: 700;
+}
+.hcl-editorial-table .body { color: var(--hcl-grey-label); font-size: 1rem; padding-top: 34px; }
+
+/* quote: light text, no italics, no giant quotation marks */
+.hcl-quote { font-size: 1.375rem; font-weight: 300; font-style: normal; max-width: 40ch; }
+.hcl-quote footer { font-size: 1rem; margin-top: 8px; color: var(--hcl-ink); }
+
+/* button */
+.hcl-btn { display: inline-block; background: var(--hcl-blue); color: #fff; border: none;
+           border-radius: var(--hcl-radius); padding: 10px 22px; font: inherit; cursor: pointer; }
+.hcl-btn.secondary { background: transparent; color: var(--hcl-accent); border: 1px solid var(--hcl-accent); }
+
+/* layout helpers: gap-based, 19px unit */
+.hcl-row  { display: flex; gap: var(--hcl-unit); flex-wrap: wrap; }
+.hcl-grid { display: grid; gap: var(--hcl-unit); }
+.hcl-rule { border: none; border-top: 0.5px solid var(--hcl-hairline); }
+
+/* icons: inline SVG with currentColor */
+.hcl-icon { width: 40px; height: 40px; color: var(--hcl-accent); }
+.hcl-hero-dark .hcl-icon, .hcl-emphasis .hcl-icon { color: #fff; }
+
+/* presentations: .hcl-deck (the paging scroller) + .hcl-slide (one slide,
+   one screen). The shipped, ratified deck grammar — never hand-roll a
+   .slide class of your own, see SKILL.md "Presentations".
+
+   .hcl-deck supports two layouts without any extra markup:
+     1) .hcl-deck IS the page (the common case) — body scrolls the
+        document and nothing else needs sizing. The :has() rule below
+        hands scroll-snap-type to the root scroller so document scrolling
+        still snaps; browsers without :has() just get plain (unsnapped)
+        scrolling, which is a safe, working fallback, not a broken one.
+     2) .hcl-deck is embedded inside a bigger page — give IT the box
+        (height + overflow-y: auto) wherever you place it, and the same
+        scroll-snap-type rule below applies directly to the element
+        instead, because it's now the scroll container. */
+.hcl-deck, html:has(.hcl-deck) {
+  scroll-snap-type: y mandatory;
+}
+.hcl-deck { counter-reset: hcl-slide; }
+
+.hcl-slide {
+  counter-increment: hcl-slide;
+  scroll-snap-align: start;
+  position: relative;
+  box-sizing: border-box;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 calc(var(--hcl-unit) * 2);
+}
+/* ground from the tokens, but at ZERO specificity (:where) on purpose: a
+   plain .hcl-slide and a modifier class like .hcl-hero-dark are otherwise
+   equal-specificity single-class selectors, and .hcl-hero-dark happens to
+   sit earlier in this file — an ordinary same-specificity background here
+   would silently win the cascade on source order and paint over the
+   gradient. :where() means this default background always loses to ANY
+   other single-class background rule, composed in any order, so dark/light
+   surfaces just work: class="hcl-slide hcl-hero-dark" needs nothing
+   deck-specific redeclared, .hcl-hero-dark/.hcl-hero-light/.hcl-emphasis
+   already rescope --hcl-ink (and --hcl-kicker-ink) the moment they land on
+   the same element. */
+:where(.hcl-slide) { background: var(--hcl-ground); }
+
+/* one thought per slide: display-scale headline, weight stays 300 per
+   brand law (inherited from the base h1 rule). clamp() keeps it sane down
+   to a half-width dev window without a media query. */
+.hcl-slide h1 { font-size: clamp(2.5rem, 1.5rem + 4vw, 4.5rem); margin: 0 0 var(--hcl-unit); }
+
+/* 16:9 discipline: the inner frame's width is capped off the VIEWPORT
+   HEIGHT, not the width, so an ultra-wide monitor letterboxes (whitespace
+   left/right) instead of stretching a line of body copy across the whole
+   screen. Body copy still measures out at the base sheet's p { max-width:
+   72ch }, this only bounds the column that holds it. */
+.hcl-slide-inner { width: 100%; max-width: calc(100svh * 16 / 9); margin: 0 auto; }
+
+/* slide numbers: automatic, bottom-right, small, muted — never hand-typed.
+   .no-number (cover, closing) suppresses it. */
+.hcl-slide::after {
+  content: counter(hcl-slide);
+  position: absolute;
+  right: var(--hcl-unit);
+  bottom: var(--hcl-unit);
+  font-size: 0.75rem;
+  color: var(--hcl-grey-label);
+}
+.hcl-slide.no-number::after { content: none; }
+
+@media print {
+  .hcl-deck, html:has(.hcl-deck) { scroll-snap-type: none; }
+  .hcl-slide { min-height: 100vh; break-inside: avoid; break-after: page; }
+  .hcl-slide:last-of-type { break-after: auto; }
+}
+
+</style>
+<style>
+  /* Page-local composition only; every colour and font comes from the brand tokens above. */
+  body{margin:0;background:var(--hcl-ground);color:var(--hcl-ink);font-family:var(--hcl-font);line-height:1.6}
+  .page{max-width:1180px;margin:0 auto;padding:0 28px 64px}
+  .brandbar{display:flex;align-items:center;justify-content:space-between;padding:26px 0 18px}
+  .brandbar .logo{width:150px;height:auto}
+  .brandbar .doc{font-size:.875rem;color:var(--hcl-grey-label)}
+  .hero{border-radius:var(--hcl-radius);padding:34px 36px;margin-bottom:30px}
+  .hero h1{line-height:1.1;margin:6px 0 14px;max-width:24ch}
+  .hero p{max-width:72ch;margin:0 0 6px}
+  .metaflex{display:flex;flex-wrap:wrap;gap:8px 30px;font-size:.875rem;margin-top:14px}
+  .metaflex b{font-weight:600}
+  h2{margin:44px 0 6px}
+  h3{font-size:1rem;font-weight:600;margin:0 0 6px}
+  .lede{max-width:76ch;color:var(--hcl-ink);margin:0 0 16px}
+  .lede-quiet{max-width:76ch;font-size:.9rem;color:var(--hcl-grey-label);margin:4px 0 16px}
+  figure{margin:0 0 8px;padding:14px}
+  figcaption{font-size:.8rem;color:var(--hcl-grey-label);margin-top:8px}
+  svg{display:block;width:100%;height:auto}
+  .cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:var(--hcl-unit)}
+  .hcl-card h3{color:var(--hcl-blue)}
+  .hcl-card p, .hcl-card li{font-size:.9rem;margin:0}
+  .hcl-card ul{margin:0;padding-left:18px}
+  .hcl-card li{margin:4px 0}
+  .keyfact{margin:18px 0}
+  .keyfact p{font-size:1.15rem;font-weight:300;max-width:64ch;margin:0}
+  .hcl-table td{font-size:.875rem}
+  .legendline{display:flex;flex-wrap:wrap;gap:10px 26px;font-size:.8rem;color:var(--hcl-grey-label);margin:6px 2px 0}
+  .legendline span{display:inline-flex;align-items:center;gap:7px}
+  .lw{width:30px;border-top:2px solid var(--hcl-midnight)}
+  .lw-dash{border-top-style:dashed}
+  .lw-new{border-top-color:var(--hcl-blue)}
+  .swb{width:13px;height:13px;border-radius:3px;border:1px solid var(--hcl-hairline);background:var(--hcl-ground)}
+  .swb-new{background:var(--hcl-blue-01);border-color:var(--hcl-blue-03)}
+  .swb-zone{background:var(--hcl-panel);border-color:var(--hcl-hairline);border-radius:5px}
+
+  /* Diagram grammar — one class per mark, tokens only */
+  .zone{fill:var(--hcl-panel);stroke:var(--hcl-hairline)}
+  .ztitle{font:600 13px var(--hcl-font);fill:var(--hcl-ink)}
+  .zsub{font:400 11px var(--hcl-font);fill:var(--hcl-grey-label)}
+  .dnode{fill:var(--hcl-ground);stroke:var(--hcl-hairline)}
+  .dnode-new{fill:var(--hcl-blue-01);stroke:var(--hcl-blue-03)}
+  .dtitle{font:600 12.5px var(--hcl-font);fill:var(--hcl-ink)}
+  .dtitle-new{fill:var(--hcl-blue-05)}
+  .dtype{font:400 9.5px var(--hcl-font);fill:var(--hcl-grey-label)}
+  .dline{font:400 11px var(--hcl-font);fill:var(--hcl-ink)}
+  .dmuted{font:400 10.5px var(--hcl-font);fill:var(--hcl-grey-label)}
+  .edge{fill:none;stroke:var(--hcl-midnight);stroke-width:1.5}
+  .edge-async{stroke-dasharray:6 5}
+  .edge-new{stroke:var(--hcl-blue)}
+  .elabel{font:600 10.5px var(--hcl-font);fill:var(--hcl-midnight);
+          paint-order:stroke;stroke:var(--hcl-ground);stroke-width:4px;stroke-linejoin:round}
+  .elabel-new{fill:var(--hcl-blue)}
+  .mInk{fill:var(--hcl-midnight)}
+  .mNew{fill:var(--hcl-blue)}
+  @media (prefers-color-scheme:dark){
+    .edge{stroke:var(--hcl-midnight-02)}
+    .edge-new{stroke:var(--hcl-accent)}
+    .elabel{fill:var(--hcl-midnight-02)}
+    .elabel-new{fill:var(--hcl-accent)}
+    .mInk{fill:var(--hcl-midnight-02)}
+    .mNew{fill:var(--hcl-accent)}
+    .dnode-new{fill:rgba(15,95,220,.18)}
+    .dtitle-new{fill:var(--hcl-blue-02)}
+    .lw{border-top-color:var(--hcl-midnight-02)}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="brandbar">
+    <div class="logo"><svg style="width:100%;height:auto;display:block" version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="45.06 43.1 515.91 93.18" style="enable-background:new 45.06 43.1 515.91 93.18;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:#0F5FDC;}
+</style>
+<g>
+	<path class="st0" d="M101.73,45.07v35.8H64.38v-35.8H45.07v90.14h19.31V97.48h37.35v37.73h19.31V45.07H101.73z"/>
+	<path class="st0" d="M244.3,118.46V45.07h-19.33v73.65c0,10.69,5.81,16.49,16.49,16.49h43.92v-16.75H244.3z"/>
+	<path class="st0" d="M285.37,45.07v16.61h26.64v73.53h19.31V61.68h26.66V45.07H285.37z"/>
+	<path class="st0" d="M395.75,113.18c-1.43,5.54-6.19,8.37-13.39,8.37c-9.01,0-14.81-5.67-16.09-14.81h46.6
+		c0.14-1.41,0.27-3.34,0.27-5.79c0-14.81-9.14-31.67-32.06-31.67c-22.03,0-32.06,16.86-32.06,33.35c0,16.34,11.34,33.6,33.35,33.6
+		c15.97,0,28.32-9.01,30.9-23.05H395.75z M381.06,82.41c8.62,0,13.64,5.79,14.16,13.02h-28.72
+		C368.06,86.39,372.95,82.41,381.06,82.41z"/>
+	<path class="st0" d="M470.7,111c-1.29,5.79-6.56,9.78-13.12,9.78c-9.78,0-15.57-7.47-15.57-18.02c0-10.55,5.65-18.15,15.32-18.15
+		c6.56,0,12.09,4.24,13.12,10.03h18.02c-1.16-15.06-14.68-25.36-31.67-25.36c-20.1,0-33.47,14.54-33.47,33.47
+		c0,18.92,13.38,33.47,33.47,33.47c16.86,0,30.26-10.82,32.19-25.23H470.7z"/>
+	<path class="st0" d="M536.88,69.28c-9.01,0-16.09,3.74-19.83,10.03V45.07h-17.9v90.14h17.9V99.66c0-8.37,5.54-14.41,13.39-14.41
+		c7.47,0,12.62,5.67,12.62,13.52v36.44h17.9V94.78C560.96,79.83,551.43,69.28,536.88,69.28z"/>
+	<path class="st0" d="M133.17,89.19c0-30.33,19.6-46.01,41.96-46.01c21.04,0,36.46,12.85,38.73,32.26h-18.77
+		c-1.2-9.38-9.44-15.68-19.96-15.68c-13.51,0-23.91,10.15-23.91,29.43c0,19.28,10.4,29.31,23.91,29.31
+		c10.76,0,19.01-6.3,20.44-15.55h17.93c-1.55,19.28-16.97,32.26-38.37,32.26C152.41,135.2,133.17,119.52,133.17,89.19z"/>
+</g>
+</svg></div>
+    <div class="doc">Internal · prepared for security review</div>
+  </div>
+
+  <div class="hero hcl-hero-light">
+    <div class="hcl-kicker">Newsletter Generator · storage architecture</div>
+    <h1>Where newsletter data lives, and every way it moves</h1>
+    <p>The Newsletter Generator is a single self-contained HTML file, opened locally on the marketer's own machine. It has
+       <b>no backend and no server-side storage</b>: every draft lives in the marketer's own browser,
+       and content leaves the browser only as files the marketer chooses to save. This brief describes
+       the data flow end to end. Image bytes are held in an origin-scoped IndexedDB store, kept
+       separate from the small localStorage draft, so large photos do not exhaust the storage
+       quota.</p>
+    <div class="metaflex">
+      <span><b>Date</b>: 1 September 2026</span>
+      <span><b>Application version</b>: v0.338</span>
+    </div>
+  </div>
+
+  <div class="keyfact hcl-emphasis">
+    <p>No newsletter content ever leaves the browser over the network. The app makes no POST
+       requests, sets no cookies, and sends no telemetry; its only outbound traffic is GET requests
+       that fetch images. Content exits only as files the marketer saves.</p>
+  </div>
+
+  <h2>System context</h2>
+  <p class="lede">One person, one browser, one HTML file opened from disk. There is no web server:
+     the application file is shared locally, and nothing is ever sent to any host.</p>
+  <figure class="hcl-card">
+  <svg viewBox="0 0 1120 300" xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Context diagram: the marketer's browser runs the app from a local HTML file; files and image hosts interact with the browser">
+    <rect class="dnode" x="30" y="110" width="190" height="80" rx="6"/>
+    <text class="dtitle" x="46" y="138">Marketer</text>
+    <text class="dtype" x="46" y="154">Person</text>
+    <text class="dmuted" x="46" y="172">writes the newsletter</text>
+
+    <rect class="dnode" x="410" y="95" width="300" height="110" rx="6"/>
+    <text class="dtitle" x="426" y="123">Newsletter Generator</text>
+    <text class="dtype" x="426" y="139">Static single-page app, runs in the browser</text>
+    <text class="dmuted" x="426" y="157">all drafting, storage and export happen</text>
+    <text class="dmuted" x="426" y="173">on the marketer's machine</text>
+
+    <rect class="dnode" x="880" y="30" width="210" height="80" rx="6"/>
+    <text class="dtitle" x="896" y="58">Application file</text>
+    <text class="dtype" x="896" y="74">Single HTML file, local</text>
+    <text class="dmuted" x="896" y="92">opened from disk; no server</text>
+
+    <rect class="dnode" x="880" y="130" width="210" height="80" rx="6"/>
+    <text class="dtitle" x="896" y="158">Image hosts</text>
+    <text class="dtype" x="896" y="174">External, GET only</text>
+    <text class="dmuted" x="896" y="192">YouTube thumbnails · pasted URLs</text>
+
+    <rect class="dnode" x="880" y="230" width="210" height="60" rx="6"/>
+    <text class="dtitle" x="896" y="256">Files on the computer</text>
+    <text class="dtype" x="896" y="272">Drafts, exports, review copies</text>
+
+    <path class="edge" d="M220,150 L406,150" marker-end="url(#ctxArrow)"/>
+    <path class="edge" d="M876,72 L714,112" marker-end="url(#ctxArrow)"/>
+    <path class="edge" d="M710,160 L876,168" marker-end="url(#ctxArrow)"/>
+    <path class="edge" d="M710,190 L876,252" marker-end="url(#ctxArrow)" marker-start="url(#ctxArrow)"/>
+    <defs>
+      <marker id="ctxArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="mInk"/></marker>
+      <marker id="ctxArrowRev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" class="mInk"/></marker>
+    </defs>
+    <text class="elabel" x="312" y="142" text-anchor="middle">edits, uploads, imports</text>
+    <text class="elabel" x="790" y="74" text-anchor="middle">opened locally</text>
+    <text class="elabel" x="793" y="156" text-anchor="middle">GET images only</text>
+    <text class="elabel" x="793" y="234" text-anchor="middle">open and save files</text>
+  </svg>
+  </figure>
+
+  <h2>Data flow and trust boundaries</h2>
+  <p class="lede">Three trust zones sit below the
+     marketer's files: the running page (volatile), the browser's origin-scoped stores (persistent,
+     this machine and profile only), and the network (outbound image fetches only).</p>
+  <figure class="hcl-card">
+  <svg viewBox="0 0 1400 1010" xmlns="http://www.w3.org/2000/svg" role="img"
+       aria-label="Data-flow diagram with trust boundaries: device files, browser tab memory, origin-scoped stores, and network">
+    <defs>
+      <marker id="aM" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="mInk"/></marker>
+      <marker id="aB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" class="mNew"/></marker>
+    </defs>
+
+    <!-- Zone: device -->
+    <rect class="zone" x="20" y="20" width="1040" height="220" rx="8"/>
+    <text class="ztitle" x="40" y="48">Inputs: the marketer's computer</text>
+    <rect class="zone" x="1080" y="20" width="300" height="220" rx="8"/>
+    <text class="ztitle" x="1100" y="48">Outputs</text>
+    <text class="zsub" x="1100" y="66">files created back on disk</text>
+    <text class="zsub" x="40" y="66">files and pastes under the user's own control</text>
+
+    <rect class="dnode" x="40" y="86" width="200" height="130" rx="6"/>
+    <text class="dtitle" x="54" y="112">Marketer</text>
+    <text class="dtype" x="54" y="128">Person</text>
+    <text class="dmuted" x="54" y="148">types content, uploads</text>
+    <text class="dmuted" x="54" y="164">photos, pastes links and</text>
+    <text class="dmuted" x="54" y="180">notes, opens saved files</text>
+
+    <rect class="dnode" x="270" y="86" width="230" height="130" rx="6"/>
+    <text class="dtitle" x="284" y="112">Uploaded photo files</text>
+    <text class="dtype" x="284" y="128">Data source · images</text>
+    <text class="dmuted" x="284" y="148">read locally in the tab;</text>
+    <text class="dmuted" x="284" y="164">stored as-is, so embedded</text>
+    <text class="dmuted" x="284" y="180">photo metadata is kept</text>
+
+    <rect class="dnode" x="530" y="86" width="250" height="130" rx="6"/>
+    <text class="dtitle" x="544" y="112">Clipboard pastes</text>
+    <text class="dtype" x="544" y="128">Data source · text and links</text>
+    <text class="dmuted" x="544" y="148">notes, authoring JSON, table</text>
+    <text class="dmuted" x="544" y="164">grids and image links; Office</text>
+    <text class="dmuted" x="544" y="180">link tracking is stripped</text>
+
+    <rect class="dnode" x="790" y="86" width="250" height="130" rx="6"/>
+    <text class="dtitle" x="804" y="112">Returning files</text>
+    <text class="dtype" x="804" y="128">Data source · drafts and reviews</text>
+    <text class="dmuted" x="804" y="148">.news drafts (link fields</text>
+    <text class="dmuted" x="804" y="164">sanitised on load) · review</text>
+    <text class="dmuted" x="804" y="180">.docx (text fields only)</text>
+
+    <rect class="dnode" x="1100" y="86" width="260" height="130" rx="6"/>
+    <text class="dtitle" x="1114" y="112">Generated files</text>
+    <text class="dtype" x="1114" y="128">Data sink · shared onward</text>
+    <text class="dmuted" x="1114" y="148">.news draft · Unica HTML and</text>
+    <text class="dmuted" x="1114" y="164">image zip · email HTML zip and</text>
+    <text class="dmuted" x="1114" y="180">.eml · review .docx (images inside)</text>
+
+    <!-- Zone: tab -->
+    <rect class="zone" x="20" y="310" width="1360" height="230" rx="8"/>
+    <text class="ztitle" x="40" y="338">The running page</text>
+    <text class="zsub" x="40" y="356">volatile memory, gone when the tab closes</text>
+
+    <rect class="dnode" x="240" y="376" width="380" height="140" rx="6"/>
+    <text class="dtitle" x="254" y="402">Editor and live draft</text>
+    <text class="dtype" x="254" y="418">Application state</text>
+    <text class="dline" x="254" y="440">the draft holds text, links and one</text>
+    <text class="dline" x="254" y="456">small id-tag per picture,</text>
+    <text class="dline" x="254" y="472">no image bytes</text>
+    <text class="dmuted" x="254" y="494">preview renders in a script-disabled frame</text>
+
+    <rect class="dnode" x="680" y="376" width="300" height="140" rx="6"/>
+    <text class="dtitle" x="694" y="402">Image byte cache</text>
+    <text class="dtype" x="694" y="418">Session memory</text>
+    <text class="dline" x="694" y="440">picture bytes by id-tag, held for</text>
+    <text class="dline" x="694" y="456">the session so preview and export</text>
+    <text class="dline" x="694" y="472">stay instant</text>
+
+    <rect class="dnode" x="1040" y="376" width="300" height="140" rx="6"/>
+    <text class="dtitle" x="1054" y="402">Undo history</text>
+    <text class="dtype" x="1054" y="418">Session memory, never persisted</text>
+    <text class="dline" x="1054" y="440">up to 50 draft snapshots; they hold</text>
+    <text class="dline" x="1054" y="456">id-tags, not photos, so they stay</text>
+    <text class="dline" x="1054" y="472">small (a few hundred KB)</text>
+
+    <!-- Zone: origin stores -->
+    <rect class="zone" x="20" y="620" width="820" height="240" rx="8"/>
+    <text class="ztitle" x="40" y="648">Browser storage</text>
+    <text class="zsub" x="40" y="666">persistent, origin-scoped: readable only by this app, in this browser profile, on this machine</text>
+
+    <rect class="dnode" x="40" y="690" width="250" height="150" rx="6"/>
+    <text class="dtitle" x="54" y="716">Draft store</text>
+    <text class="dtype" x="54" y="732">localStorage · about 5 MB</text>
+    <text class="dline" x="54" y="754">the whole draft; after the</text>
+    <text class="dline" x="54" y="770">change it is a few KB of text</text>
+    <text class="dline" x="54" y="786">and id-tags</text>
+    <text class="dmuted" x="54" y="808">written synchronously, so a</text>
+    <text class="dmuted" x="54" y="824">crash or tab-close still saves</text>
+
+    <rect class="dnode" x="320" y="690" width="250" height="150" rx="6"/>
+    <text class="dtitle" x="334" y="716">Image locker</text>
+    <text class="dtype" x="334" y="732">IndexedDB · hundreds of MB</text>
+    <text class="dline" x="334" y="754">picture bytes filed by id-tag;</text>
+    <text class="dline" x="334" y="770">unreferenced bytes are swept</text>
+    <text class="dline" x="334" y="786">on every open</text>
+    <text class="dmuted" x="334" y="808">unavailable (private browsing):</text>
+    <text class="dmuted" x="334" y="824">falls back to today's behaviour</text>
+
+    <rect class="dnode" x="600" y="690" width="220" height="150" rx="6"/>
+    <text class="dtitle" x="614" y="716">Folder memory</text>
+    <text class="dtype" x="614" y="732">IndexedDB · existing</text>
+    <text class="dline" x="614" y="754">remembers the last save</text>
+    <text class="dline" x="614" y="770">folder for the file dialog;</text>
+    <text class="dline" x="614" y="786">holds no content</text>
+
+    <!-- Zone: network -->
+    <rect class="zone" x="880" y="620" width="500" height="240" rx="8"/>
+    <text class="ztitle" x="900" y="648">Network</text>
+    <text class="zsub" x="900" y="666">outbound GET fetches of images; nothing is posted</text>
+
+    <rect class="dnode" x="900" y="690" width="220" height="150" rx="6"/>
+    <text class="dtitle" x="914" y="716">YouTube</text>
+    <text class="dtype" x="914" y="732">External · GET only</text>
+    <text class="dline" x="914" y="754">public video thumbnail,</text>
+    <text class="dline" x="914" y="770">loaded when previewed and</text>
+    <text class="dline" x="914" y="786">fetched at export if missing</text>
+
+    <rect class="dnode" x="1150" y="690" width="210" height="150" rx="6"/>
+    <text class="dtitle" x="1164" y="716">Pasted image hosts</text>
+    <text class="dtype" x="1164" y="732">External · GET only</text>
+    <text class="dline" x="1164" y="754">internally hosted images,</text>
+    <text class="dline" x="1164" y="770">loaded whenever shown in the</text>
+    <text class="dline" x="1164" y="786">editor; fetched for the email zip</text>
+
+    <!-- Edges -->
+    <path class="edge" d="M140,216 L140,290 L360,290 L400,372" marker-end="url(#aM)"/>
+    <path class="edge" d="M385,216 L430,372" marker-end="url(#aM)"/>
+    <path class="edge" d="M655,216 L560,372" marker-end="url(#aM)"/>
+    <path class="edge" d="M935,216 L600,368" marker-end="url(#aM)"/>
+    <path class="edge edge-async" d="M1230,220 L1230,276 L640,276 L610,372" marker-start="url(#aM)"/>
+    <path class="edge" d="M240,516 L150,686" marker-end="url(#aM)"/>
+    <path class="edge" d="M260,686 L260,540 L300,516" marker-end="url(#aM)"/>
+    <path class="edge edge-async" d="M620,470 L680,470" marker-end="url(#aM)"/>
+    <path class="edge edge-async" d="M800,516 L520,686" marker-end="url(#aM)" marker-start="url(#aM)"/>
+    <path class="edge" d="M450,376 L450,350 L1150,350 L1150,376" marker-end="url(#aM)" marker-start="url(#aM)"/>
+    <path class="edge edge-async" d="M560,540 L560,600 L700,600 L706,686" marker-end="url(#aM)"/>
+    <path class="edge edge-async" d="M520,516 L1000,686" marker-end="url(#aM)"/>
+    <path class="edge edge-async" d="M600,516 L1240,686" marker-end="url(#aM)"/>
+
+    <!-- Edge labels -->
+    <text class="elabel" x="360" y="284" text-anchor="middle">edits (typed content)</text>
+    <text class="elabel" x="425" y="300" text-anchor="middle">photo bytes, read locally</text>
+    <text class="elabel" x="620" y="300" text-anchor="middle">text and links, escaped on output</text>
+    <text class="elabel" x="790" y="300" text-anchor="middle">draft JSON · review text</text>
+    <text class="elabel" x="945" y="270" text-anchor="middle">finished files, images re-embedded</text>
+    <text class="elabel" x="30" y="602">tags-only draft, saved</text>
+    <text class="elabel" x="30" y="618">synchronously (crash-safe)</text>
+    <text class="elabel" x="264" y="556">draft read on open</text>
+    <text class="elabel elabel-new" x="650" y="458" text-anchor="middle">bytes by id</text>
+    <text class="elabel elabel-new" x="672" y="618" text-anchor="middle">store and fetch picture bytes by id-tag</text>
+    <text class="elabel" x="800" y="344" text-anchor="middle">draft snapshots for undo</text>
+    <text class="elabel" x="628" y="594">last-used folder handle</text>
+    <text class="elabel" x="790" y="588">GET video thumbnail</text>
+    <text class="elabel" x="1055" y="628">GET linked images (show + zip)</text>
+  </svg>
+  <div class="legendline">
+    <span><span class="swb swb-zone"></span> trust zone</span>
+    <span><span class="lw"></span> synchronous flow</span>
+    <span><span class="lw lw-dash"></span> asynchronous flow</span>
+    <span>arrowheads show data direction</span>
+  </div>
+  </figure>
+
+  <h2>Every way data enters</h2>
+  <div class="hcl-table-wrap">
+  <table class="hcl-table h-purple">
+    <thead><tr><th>Source</th><th>How it enters</th><th>What the data is</th><th>Controls at this door</th></tr></thead>
+    <tbody>
+      <tr><td>Uploaded photo files</td><td>File picker or drag-and-drop</td><td>Images, possibly internal imagery; embedded metadata is preserved</td><td>Read locally; never transmitted; stored under browser origin isolation</td></tr>
+      <tr><td>Pasted image links</td><td>Link fields in the editor</td><td>URLs to hosted images</td><td>Scheme allow-list at every render point: only http(s) and image data URIs; script schemes are blocked</td></tr>
+      <tr><td>Pasted notes and authoring JSON</td><td>The import box</td><td>Newsletter text and structure</td><td>Output escaping proven by an automated injection test that drives every import door on every build</td></tr>
+      <tr><td>Pasted table text</td><td>Paste into a table cell</td><td>A text grid, pipe, tab or comma separated</td><td>Parsed as plain text into table cells; nothing is executed or rendered as markup</td></tr>
+      <tr><td>Review Word file (.docx)</td><td>Import from Word</td><td>A reviewer's text edits</td><td>Restricted to a fixed whitelist of text fields; images and formatting are never imported from Word</td></tr>
+      <tr><td>Saved draft file (.news)</td><td>Open file</td><td>A full draft as JSON</td><td>Link-type fields sanitised on load: script schemes and non-image data URIs removed</td></tr>
+      <tr><td>Pasted links</td><td>Any link field</td><td>Links wrapped by Outlook or Teams</td><td>Safelinks wrappers unwrapped and tracking parameters stripped before storage</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Data at rest</h2>
+  <div class="hcl-table-wrap">
+  <table class="hcl-table h-blue">
+    <thead><tr><th>Store</th><th>Contents</th><th>Protection</th><th>Lifetime and clearing</th></tr></thead>
+    <tbody>
+      <tr><td>Draft store (localStorage)</td><td>Text, links and id-tags only; a few KB</td><td>Browser origin isolation plus the OS user profile; not encrypted at rest</td><td>Until replaced; cleared by New file or Discard draft</td></tr>
+      <tr><td>Image locker (IndexedDB)</td><td>Picture bytes, one record per unique image</td><td>Same origin isolation and profile protection; unreferenced bytes swept on every open</td><td>Follows the draft</td></tr>
+      <tr><td>Folder memory (IndexedDB), existing</td><td>The last-used save-folder handle; no content</td><td>Same origin isolation</td><td>Until the browser clears site data</td></tr>
+      <tr><td>Session memory only</td><td>Undo history and image caches</td><td>Never written to disk</td><td>Gone when the tab closes</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Network behaviour</h2>
+  <p class="lede">The application is opened from a local file and fetches no code over the network. Its code contains exactly one network call: a GET that collects linked images while building the email zip. Beyond that, the browser itself loads any linked image the marketer pastes, the same way any page displays a picture: while editing, in the preview, and when a video card shows its thumbnail. There are no POST requests, no
+     XMLHttpRequest, no WebSocket, no beacon, no cookies and no analytics anywhere in the app.</p>
+  <div class="hcl-table-wrap">
+  <table class="hcl-table">
+    <thead><tr><th>Endpoint</th><th>When</th><th>Direction and content</th></tr></thead>
+    <tbody>
+      <tr><td>img.youtube.com</td><td>While a video thumbnail is shown, and at export if it is missing</td><td>Outbound GET; public thumbnail image returns</td></tr>
+      <tr><td>Hosts of pasted image links</td><td>Whenever a linked image is displayed while editing, and while building the email zip</td><td>Outbound GET; the image returns for embedding</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Storage security properties</h2>
+  <div class="cardgrid">
+    <div class="hcl-card">
+      <h3>Isolation and egress</h3>
+      <ul>
+        <li>No network egress of newsletter content; the only outbound traffic is image GETs</li>
+        <li>Every store is origin-scoped: readable only by this app, in this browser profile, on this machine</li>
+        <li>The live preview renders inside a script-disabled sandboxed frame</li>
+        <li>The draft is saved synchronously, so it survives an abrupt close</li>
+      </ul>
+    </div>
+    <div class="hcl-card">
+      <h3>The image locker</h3>
+      <ul>
+        <li>An origin-scoped IndexedDB database holds the image bytes</li>
+        <li>Same isolation model as the app's folder-memory database</li>
+        <li>Unreferenced bytes are swept on every open, bounding retention</li>
+        <li>If IndexedDB is unavailable, the app stores bytes inline instead and says so visibly</li>
+      </ul>
+    </div>
+    <div class="hcl-panel">
+      <h3 style="color:var(--hcl-blue)">At-rest footprint</h3>
+      <ul>
+        <li>Image bytes sit in IndexedDB (hundreds of MB), apart from the small draft store</li>
+        <li>Exports re-embed images, so shared files stay self-contained and portable</li>
+        <li>Undo history holds id-tags, not photos, so it stays small</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>Security preventions already in place</h2>
+  <p class="lede">The first group is exercised by the project's own automated
+     dynamic security test (DAST), which attacks the app in a real browser on every build and turns
+     the build red if any payload executes.</p>
+  <div class="cardgrid">
+    <div class="hcl-card">
+      <h3>Injection and content safety</h3>
+      <ul>
+        <li>Two-layer injection defence, re-verified on every build: a fast output-escaping check plus a real-browser attack run that pushes hostile payloads through every import door and fails the build if any executes</li>
+        <li>Scheme allow-list at every image render point: only http(s) and image data URIs; script schemes are blocked</li>
+        <li>The live preview renders inside a script-disabled sandboxed frame</li>
+        <li>A baseline content-security-policy ships on the page</li>
+      </ul>
+    </div>
+    <div class="hcl-card">
+      <h3>Malformed data and file hygiene</h3>
+      <ul>
+        <li>A corrupt draft file stops with a plain message; the working draft is never replaced</li>
+        <li>Link fields in opened drafts are sanitised on load: script schemes and non-image data URIs are removed</li>
+        <li>Word import writes only a fixed whitelist of text fields; images and markup never import from Word</li>
+        <li>Pasted table text is parsed as plain text; nothing pasted is executed</li>
+        <li>Pasted links are unwrapped from Safelinks wrappers and stripped of tracking parameters</li>
+        <li>The shared application file comes from a controlled, versioned release build</li>
+      </ul>
+    </div>
+  </div>
+
+
+</div>
+</body>
+</html>
