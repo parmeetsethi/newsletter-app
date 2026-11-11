@@ -1,16 +1,16 @@
 {
-  "version": "0.378",
-  "sourceFile": "src/Newsletter_Generator_v0.378.html",
-  "outputFile": "dist/newsletter-v0.378.min.html",
-  "gitCommit": "981bbda",
-  "gitCommitFull": "981bbda831526fb3f45a89bd3270f694637c8dcb",
-  "sourceSha": "7dafa2a0",
-  "outputSha": "90eb3d4f",
-  "outputShaFull": "90eb3d4f95f9fb0e555bad8395579ebc157b350ebd6c6f1ffcb62feb871c56a7",
-  "builtAt": "2026-11-10T23:07:10.263Z",
+  "version": "0.379",
+  "sourceFile": "src/Newsletter_Generator_v0.379.html",
+  "outputFile": "dist/newsletter-v0.379.min.html",
+  "gitCommit": "e0adae4",
+  "gitCommitFull": "e0adae4d568b7be530214cfe704c23692f826fa6",
+  "sourceSha": "ee7b2c25",
+  "outputSha": "1af6d104",
+  "outputShaFull": "1af6d1041a419dd22485dc043c4891549e47d0954dc2681aa86fd0d6aeb8e51e",
+  "builtAt": "2026-11-11T00:16:34.181Z",
   "sizeBytes": {
-    "source": 6469495,
-    "output": 4964386,
+    "source": 6469642,
+    "output": 4964533,
     "reductionPercent": 23
   },
   "tools": {
